@@ -1,0 +1,127 @@
+export type Role = 'user' | 'assistant';
+
+export interface InferenceMetadata {
+  requestId:     string;
+  nodePeerId?:   string;
+  latencyMs?:    number;
+  recalledFacts?: string[];
+}
+
+export interface Message {
+  id:          string;
+  role:        Role;
+  content:     string;
+  timestamp:   number;
+  durationMs?: number;
+  inference?:  InferenceMetadata;
+}
+
+export interface SessionRecord {
+  id:        string;
+  title:     string;
+  createdAt: number;
+  updatedAt: number;
+  messages:  Message[];
+  coordinatorSessionId?: string;
+  sessionKey?: string;
+}
+
+const STORAGE_KEY = 'pinaivu:sessions';
+
+function readAll(): SessionRecord[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as SessionRecord[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeAll(sessions: SessionRecord[]): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+}
+
+export function listSessions(): SessionRecord[] {
+  return readAll().sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export function getSession(id: string): SessionRecord | null {
+  return readAll().find(s => s.id === id) ?? null;
+}
+
+export function createSession(): SessionRecord {
+  const now = Date.now();
+  const session: SessionRecord = {
+    id:        crypto.randomUUID(),
+    title:     'New chat',
+    createdAt: now,
+    updatedAt: now,
+    messages:  [],
+  };
+  const all = readAll();
+  writeAll([session, ...all]);
+  return session;
+}
+
+export function deleteSession(id: string): void {
+  writeAll(readAll().filter(s => s.id !== id));
+}
+
+export function appendMessage(
+  sessionId: string,
+  message:   Omit<Message, 'id' | 'timestamp'>,
+): Message {
+  const msg: Message = {
+    ...message,
+    id:        crypto.randomUUID(),
+    timestamp: Date.now(),
+  };
+
+  const all = readAll();
+  const idx = all.findIndex(s => s.id === sessionId);
+  if (idx === -1) throw new Error(`session ${sessionId} not found`);
+
+  const session = { ...all[idx] };
+  session.messages  = [...session.messages, msg];
+  session.updatedAt = Date.now();
+
+  if (session.title === 'New chat' && message.role === 'user') {
+    session.title = message.content.slice(0, 60) + (message.content.length > 60 ? '…' : '');
+  }
+
+  all[idx] = session;
+  writeAll(all);
+  return msg;
+}
+
+export function updateSessionCoordinator(
+  sessionId: string,
+  coordinatorSessionId: string,
+  sessionKey: string,
+): void {
+  const all = readAll();
+  const idx = all.findIndex(s => s.id === sessionId);
+  if (idx === -1) return;
+  all[idx] = { ...all[idx], coordinatorSessionId, sessionKey };
+  writeAll(all);
+}
+
+export function updateLastAssistantMessage(
+  sessionId: string,
+  content:   string,
+  extra?:    Partial<Pick<Message, 'durationMs' | 'inference'>>,
+): void {
+  const all = readAll();
+  const idx = all.findIndex(s => s.id === sessionId);
+  if (idx === -1) return;
+
+  const msgs = [...all[idx].messages];
+  const lastIdx = msgs.length - 1;
+  if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+    msgs[lastIdx] = { ...msgs[lastIdx], content, ...extra };
+    all[idx] = { ...all[idx], messages: msgs, updatedAt: Date.now() };
+    writeAll(all);
+  }
+}
