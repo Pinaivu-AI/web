@@ -13,6 +13,7 @@ import {
   Shield,
   ExternalLink,
   Loader2,
+  Cpu,
 } from 'lucide-react';
 
 interface RecentReceipt {
@@ -27,9 +28,21 @@ interface RecentReceipt {
   walrus_blob_id: string | null;
 }
 
+interface LiveNode {
+  peer_id: string;
+  online: boolean;
+  last_seen_ms: number;
+  seconds_since_seen: number;
+  models: string[];
+  max_concurrent_jobs: number;
+  multiaddrs: string[];
+  jobs_served: number;
+}
+
 export default function ExplorerPage() {
   const [query, setQuery] = useState('');
   const [recent, setRecent] = useState<RecentReceipt[]>([]);
+  const [nodes, setNodes] = useState<LiveNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState('');
@@ -43,8 +56,20 @@ export default function ExplorerPage() {
       } catch {}
       setLoading(false);
     }
+    async function loadNodes() {
+      try {
+        const res = await fetch('/api/explorer/nodes');
+        if (res.ok) setNodes(await res.json());
+      } catch {}
+    }
     loadRecent();
+    loadNodes();
+    // Refresh live node status periodically so online/offline stays current.
+    const t = setInterval(loadNodes, 15000);
+    return () => clearInterval(t);
   }, []);
+
+  const onlineCount = nodes.filter(n => n.online).length;
 
   async function handleSearch() {
     const id = query.trim();
@@ -130,9 +155,27 @@ export default function ExplorerPage() {
         {/* Stats strip */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
           <StatCard icon={<Shield className="w-4 h-4" />} label="Verified Receipts" value={String(recent.length)} />
-          <StatCard icon={<Server className="w-4 h-4" />} label="Active Nodes" value={recent.length > 0 ? String(new Set(recent.map(r => r.receipt_json.primary_peer_id)).size) : '0'} />
+          <StatCard icon={<Server className="w-4 h-4" />} label="Nodes Online" value={String(onlineCount)} />
           <StatCard icon={<Wallet className="w-4 h-4" />} label="Total Settled" value={formatSui(recent.reduce((s, r) => s + (r.receipt_json.payouts ?? []).reduce((a, p) => a + p.amount_nanox, 0), 0))} />
           <StatCard icon={<Clock className="w-4 h-4" />} label="Latest" value={recent[0] ? timeAgo(recent[0].created_at) : '—'} />
+        </div>
+
+        {/* Live nodes */}
+        <div className="mb-10">
+          <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wide mb-4">
+            Live Nodes
+          </h3>
+          {nodes.length === 0 ? (
+            <div className="bg-surface-1 border border-surface-2/60 rounded-xl px-6 py-8 text-center">
+              <p className="text-zinc-500 text-sm">No nodes connected to the coordinator right now.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {nodes.map((n) => (
+                <NodeRow key={n.peer_id} node={n} />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Recent receipts */}
@@ -220,6 +263,57 @@ function ReceiptRow({ receipt }: { receipt: RecentReceipt }) {
       </div>
 
       {/* Arrow */}
+      <ArrowRight className="w-4 h-4 text-zinc-600 group-hover:text-accent flex-shrink-0 transition-colors" />
+    </Link>
+  );
+}
+
+function NodeRow({ node }: { node: LiveNode }) {
+  return (
+    <Link
+      href={`/n/${node.peer_id}`}
+      className="group flex items-center gap-4 bg-surface-1 border border-surface-2/60 rounded-xl px-5 py-4
+                 hover:border-accent/30 hover:bg-surface-2/30 transition-all"
+    >
+      {/* Status dot */}
+      <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center relative">
+        <Cpu className="w-5 h-5 text-accent" />
+        <span
+          className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-surface-1 ${
+            node.online ? 'bg-emerald-400' : 'bg-zinc-600'
+          }`}
+        />
+      </div>
+
+      {/* Main info */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="font-mono text-[13px] text-zinc-200 truncate">{node.peer_id}</span>
+          <span
+            className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${
+              node.online
+                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+            }`}
+          >
+            {node.online ? 'online' : 'offline'}
+          </span>
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-zinc-500">
+          <span className="truncate">{node.models.join(', ') || 'no models'}</span>
+          <span>·</span>
+          <span>{node.max_concurrent_jobs} slots</span>
+          <span>·</span>
+          <span>seen {node.seconds_since_seen}s ago</span>
+        </div>
+      </div>
+
+      {/* Jobs served */}
+      <div className="flex-shrink-0 text-right">
+        <span className="text-sm font-medium text-zinc-200">{node.jobs_served}</span>
+        <span className="text-[10px] text-zinc-500 block">jobs</span>
+      </div>
+
       <ArrowRight className="w-4 h-4 text-zinc-600 group-hover:text-accent flex-shrink-0 transition-colors" />
     </Link>
   );
